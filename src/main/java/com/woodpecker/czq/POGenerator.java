@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.sql.*;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * @author: woodpecker
@@ -16,7 +17,7 @@ import java.util.*;
  * //TODO
  * 未解决问题：
  * 1.类型不全
- * 2.注释未生成
+ *
  * 3.toString()未生成
  * 4.外键问题
  * 5.基本类型与包装类型
@@ -51,11 +52,11 @@ public class POGenerator {
         List tableList = getTableList();
         String tableName;
         String entityName;
-
+        String comment = null;
         try {
             for (int i = 0; i < tableList.size(); i++) {
                 tableName = (String) tableList.get(i);
-                entityName = tableNameToEntityName(tableName);
+                entityName = mapUnderscoreToBigCamelCase(tableName);
                 Map<String, String> propertiesMap = getEntityProperties(tableName);
 
                 File file = new File(path, entityName + ".java");
@@ -83,7 +84,14 @@ public class POGenerator {
                 //成员变量声明
 
                 for (String key : propertiesMap.keySet()) {
-                    printWriter.println("\tprivate " + propertiesMap.get(key) + " " + key + ";");
+                    printWriter.print("\tprivate " + propertiesMap.get(key) + " " + key + ";");
+                    //添加注释
+                    comment = getComment(tableName, mapCamelCaseToUnderscore(key));
+                    if (comment == null || "".equals(comment.trim())) {
+                        printWriter.println();
+                    } else {
+                        printWriter.println("  //" + comment);
+                    }
                 }
 
                 //getter and  setter
@@ -107,6 +115,7 @@ public class POGenerator {
 
     /**
      * 生成getter and setter
+     *
      * @param type
      * @param name
      * @return
@@ -133,8 +142,29 @@ public class POGenerator {
     }
 
     /**
+     * 获取某张表中某个字段的注释
+     *
+     * @param tableName  数据库表名
+     * @param columnName 数据库列名
+     * @return
+     */
+    public String getComment(String tableName, String columnName) {
+        String comment = null;
+        try {
+            ResultSet columns = connection.getMetaData().getColumns(null, null, tableName, columnName);
+            while (columns.next()) {
+                comment = columns.getString("REMARKS");
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return comment;
+    }
+
+    /**
      * 生成import语句
      * //TODO 待完善
+     *
      * @param values
      * @return
      */
@@ -150,6 +180,7 @@ public class POGenerator {
 
     /**
      * 生成package声明
+     *
      * @param path 格式：F:\IDEA\POGenerator\src\main\java\com\woodpecker\czq
      * @return
      */
@@ -169,17 +200,19 @@ public class POGenerator {
 
 
     /**
-     * 将表名转为实体类名称
-     * @param tableName 格式：goods_user、order_info
-     * @return
+     * 将下划线命名法映射为大驼峰命名法
+     *
+     * @param underscoreName 格式：miaosha_user、MIAOSHA_USER
+     * @return MiaoshaUser
      */
-    public static String tableNameToEntityName(String tableName) {
-        String str = dbNameToPropertyName(tableName);
+    public static String mapUnderscoreToBigCamelCase(String underscoreName) {
+        String str = mapUnderscoreToCamelCase(underscoreName);
         return str.substring(0, 1).toUpperCase() + str.substring(1);
     }
 
     /**
      * 根据表名获取实现类属性（表名 --> 列名+列类型 --> 实体属性Map（key:属性名；value:属性类型））
+     *
      * @param tableName
      * @return
      */
@@ -193,7 +226,7 @@ public class POGenerator {
             ResultSet columns = connection.getMetaData().getColumns(null, null, tableName, null);
             while (columns.next()) {
                 columnName = columns.getString("COLUMN_NAME");
-                propertyName = dbNameToPropertyName(columnName);
+                propertyName = mapUnderscoreToCamelCase(columnName);
                 dbType = columns.getString("TYPE_NAME");
                 javaType = dbTypeToJavaType(dbType);
                 map.put(propertyName, javaType);
@@ -206,6 +239,7 @@ public class POGenerator {
 
     /**
      * 数据库类型转换为Java数据类型（）
+     *
      * @param dbType
      * @return
      */
@@ -227,27 +261,61 @@ public class POGenerator {
     }
 
     /**
-     * 将形如goods_title的数据库字段名转化为goodsTitle的属性驼峰命名法
-     * @param columnName
-     * @return
+     * 将下划线命名法映射为驼峰命名法
+     *
+     * @param columnName 格式：Goods_Name、good_name
+     * @return 格式：goodName
      */
-    public static String dbNameToPropertyName(String columnName) {
+    public static String mapUnderscoreToCamelCase(String columnName) {
+        if (columnName == null || "".equals(columnName.trim())) {
+            return null;
+        }
         String[] split = columnName.split("_");
         if (split.length < 0) {
             return null;
         } else if (split.length == 1) {
             return split[0];
         } else {
-            StringBuffer stringBuffer = new StringBuffer(split[0]);
+            StringBuffer stringBuffer = new StringBuffer(split[0].toLowerCase());
             for (int i = 1; i < split.length; i++) {
-                stringBuffer.append(split[i].substring(0, 1).toUpperCase() + split[i].substring(1));
+                stringBuffer.append(split[i].substring(0, 1).toUpperCase() + split[i].substring(1).toLowerCase());
             }
             return stringBuffer.toString();
         }
     }
 
+
+    /**
+     * 将驼峰命名法（此处包含大驼峰和小驼峰）映射为下划线命名法
+     *
+     * @param string 格式：goodsName、OrderInfo
+     * @return 格式：goods_name、order_info
+     */
+    public static String mapCamelCaseToUnderscore(String string) {
+        if (string == null || "".equals(string.trim())) {
+            return null;
+        } else if (string.length() == 1) {
+            return string;
+        } else {
+            int start = 0;
+            StringBuffer stringBuffer = new StringBuffer();
+            for (int i = 1; i < string.length(); i++) {
+                if (Character.isUpperCase(string.charAt(i))) {
+                    stringBuffer.append(string.substring(start, i).toLowerCase() + "_");
+                    start = i;
+                }
+
+            }
+            stringBuffer.append(string.substring(start).toLowerCase());
+            return stringBuffer.toString();
+        }
+
+
+    }
+
     /**
      * 获取所有表名
+     *
      * @return
      */
     public List getTableList() {
@@ -268,6 +336,7 @@ public class POGenerator {
 
     /**
      * 获取数据库连接
+     *
      * @return
      */
     public Connection getConnection() {
